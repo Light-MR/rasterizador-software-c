@@ -14,6 +14,7 @@
 #include <gs.h>
 #include <libosw/osw.h>
 #include <stdio.h>
+#include <tdm.h>
 #include <trx.h>
 
 #define FB_W 640
@@ -143,7 +144,7 @@ static u32 face_edge_idx[48] = {
 
 /* ── Main ───────────────────────────────────────────────────────── */
 
-int main(void) {
+int main(int argc, char **argv) {
   u32 err = OSW_Init("Cubo 3D", FB_W, FB_H, 0);
   if (err != OSW_OK)
     return (int)err;
@@ -152,6 +153,18 @@ int main(void) {
   gs_Init(framebuffer, FB_W, FB_H);
   gs_Viewport(0, 0, FB_W, FB_H);
   gs_SetClearColor(0xFF1C1C1C, 1.0f);
+
+  /* Modelo opcional: `prog.exe <ruta.tdm>` carga y renderiza esa malla.
+   * Sin argumentos → cubo de siempre. tdm_Load la normaliza al tamaño del
+   * cubo unitario, así se reusan los mismos controles de rotación/zoom. */
+  TdmModel model;
+  int show_model = 0;
+  if (argc > 1) {
+    if (tdm_Load(argv[1], &model) == 0)
+      show_model = 1;
+    else
+      printf("[main] no se pudo cargar '%s'; mostrando el cubo.\n", argv[1]);
+  }
 
   /* Ángulos de rotación (reconstruyen M limpia cada frame) y distancia de
    * cámara */
@@ -244,7 +257,16 @@ int main(void) {
 
     gs_Clear();
 
-    if (use_ortho) {
+    if (show_model) {
+      /* Modelo .tdm: opaco, z-buffer activo. Sin back-face culling
+       * (cull=0) porque el winding de una malla externa es desconocido;
+       * así se ve siempre. Iluminación/texturas vendrán después. */
+      gs_SetAlpha(1.0f);
+      gs_SetLineDepthTest(1);
+      gs_SetBackfaceCull(0);
+      gs_DrawElems(GS_TYPE_TRIANGLES, model.verts, model.n_verts,
+                   model.index, model.n_index);
+    } else if (use_ortho) {
       /* MODO ORTOGONAL: Caras OPACAS con backface culling: cada píxel lo dibuja un triángulo → sin diagonal */
       gs_SetAlpha(1.0f);
       gs_SetBackfaceCull(1);
