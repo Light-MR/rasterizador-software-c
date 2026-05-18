@@ -1,6 +1,7 @@
     
 #include <gs.h>
 #include <string.h>
+#include <math.h>     /* sqrtf, powf (atenuación / especular) */
 
 /* ── Estado interno ─────────────────────────────────────────────── */
 
@@ -14,6 +15,12 @@ static mat4   gs_matM, gs_matV, gs_matP, gs_MVP;
 static int    gs_line_ztest    = 1;    /* 1=normal, 0=siempre dibuja */
 static float  gs_alpha         = 1.0f; /* 1.0=opaco, 0.0=invisible   */
 static int    gs_backface_cull = 1;    /* 1=cull (default), 0=ambas caras */
+
+static GsLight    gs_light;            /* buffer constante de luz (mundo) */
+static GsMaterial gs_material = { {1.0f,1.0f,1.0f}, 16.0f }; /* default */
+static vec3       gs_camPos;           /* posición de cámara en mundo */
+static int        gs_lighting = 0;     /* iluminación por fragmento on/off */
+static mat3       gs_normalMat;        /* normalMat(M) del draw lit actual */
 
 /* ── Helpers internos ───────────────────────────────────────────── */
 
@@ -39,8 +46,10 @@ static u32 vec3_to_argb(vec3 c) {
 
 /* Transforma un vértice por gs_MVP (precalculada) y lo lleva a
    coordenadas de pantalla. También devuelve la profundidad en [0,1]
-   para el z-buffer. Retorna 0 si el vértice está detrás de la cámara. */
-static int project(vec3 pos, s32 *sx, s32 *sy, float *depth) {
+   para el z-buffer. Si inv_w != NULL escribe 1/w (para interpolación
+   perspectivamente correcta de atributos). Retorna 0 si el vértice está
+   detrás de la cámara. */
+static int project(vec3 pos, s32 *sx, s32 *sy, float *depth, float *inv_w) {
     vec3  clip;
     float w = vec3_mat4Mul(&clip, gs_MVP, pos);
     if (w <= 0.0f) return 0;
@@ -50,6 +59,7 @@ static int project(vec3 pos, s32 *sx, s32 *sy, float *depth) {
     *sx    = (s32)(( ndc.x * 0.5f + 0.5f)         * (float)gs_vp_w + (float)gs_vp_x);
     *sy    = (s32)((1.0f - (ndc.y * 0.5f + 0.5f)) * (float)gs_vp_h + (float)gs_vp_y);
     *depth = ndc.z * 0.5f + 0.5f;         /* [-1,1] → [0,1]  (0=cerca, 1=lejos) */
+    if (inv_w) *inv_w = 1.0f / w;
     return 1;
 }
 
@@ -107,12 +117,16 @@ void sg_UseProgram(VertShader *vsh, FragShader *fsh) { (void)vsh; (void)fsh; }
 void gs_SetLineDepthTest(int e)            { gs_line_ztest    = e; }
 void gs_SetAlpha(float a)                  { gs_alpha         = a; }
 void gs_SetBackfaceCull(int e)             { gs_backface_cull = e; }
+void gs_SetLight(GsLight light)            { gs_light         = light; }
+void gs_SetMaterial(GsMaterial m)          { gs_material      = m; }
+void gs_SetCameraPos(vec3 cam)             { gs_camPos        = cam; }
+void gs_SetLighting(int e)                 { gs_lighting      = e; }
 
 /* ── Primitivas ─────────────────────────────────────────────────── */
 
 static void __gs_DrawPoint(Vert *v0) {
     s32 sx, sy;  float depth;
-    if (!project(v0->pos, &sx, &sy, &depth)) return;
+    if (!project(v0->pos, &sx, &sy, &depth, NULL)) return;
 
     u32 idx = (u32)sy * gs_fb_w + (u32)sx;
     if (depth >= gs_zbuf[idx]) return;
@@ -122,8 +136,8 @@ static void __gs_DrawPoint(Vert *v0) {
 
 static void __gs_DrawLine(Vert *v0, Vert *v1) {
     s32 x0, y0, x1, y1;  float d0, d1;
-    if (!project(v0->pos, &x0, &y0, &d0)) return;
-    if (!project(v1->pos, &x1, &y1, &d1)) return;
+    if (!project(v0->pos, &x0, &y0, &d0, NULL)) return;
+    if (!project(v1->pos, &x1, &y1, &d1, NULL)) return;
 
     s32 dx = x1-x0; if (dx<0) dx=-dx;
     s32 dy = y1-y0; if (dy<0) dy=-dy;
@@ -158,14 +172,34 @@ static void __gs_DrawLine(Vert *v0, Vert *v1) {
     }
 }
 
-static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2) {
+/* nrm0/1/2: normales por vértice para iluminación (NULL = sin iluminar).
+   Solo se usan si gs_lighting y los punteros no son NULL. */
+static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
+                              vec3 *nrm0, vec3 *nrm1, vec3 *nrm2) {
 
     /* 1. Proyectar los 3 vértices */
     s32 sx0,sy0, sx1,sy1, sx2,sy2;
     float z0, z1, z2;
-    if (!project(v0->pos, &sx0, &sy0, &z0)) return;
-    if (!project(v1->pos, &sx1, &sy1, &z1)) return;
-    if (!project(v2->pos, &sx2, &sy2, &z2)) return;
+    float iw0, iw1, iw2;   /* 1/w por vértice (interpolación perspectiva) */
+    if (!project(v0->pos, &sx0, &sy0, &z0, &iw0)) return;
+    if (!project(v1->pos, &sx1, &sy1, &z1, &iw1)) return;
+    if (!project(v2->pos, &sx2, &sy2, &z2, &iw2)) return;
+
+    /* Iluminación por fragmento (espacio mundo): posición y normal por
+       vértice en mundo. P = M·pos ; n = normalMat(M)·normal.
+       Se interpolan luego con los pesos perspectiva p0,p1,p2. */
+    int  lit = (gs_lighting && nrm0 && nrm1 && nrm2);
+    vec3 Pw0, Pw1, Pw2;   /* posición mundo */
+    vec3 Nw0, Nw1, Nw2;   /* normal mundo (normalizada) */
+    if (lit) {
+        vec3_mat4Mul(&Pw0, gs_matM, v0->pos);
+        vec3_mat4Mul(&Pw1, gs_matM, v1->pos);
+        vec3_mat4Mul(&Pw2, gs_matM, v2->pos);
+        vec3 tmp = {0.0f, 0.0f, 0.0f};  /* scratch (vec3_matMul solo escribe) */
+        Nw0 = vec3_normalize(vec3_matMul(tmp, gs_normalMat, *nrm0));
+        Nw1 = vec3_normalize(vec3_matMul(tmp, gs_normalMat, *nrm1));
+        Nw2 = vec3_normalize(vec3_matMul(tmp, gs_normalMat, *nrm2));
+    }
 
     /* 2. Back-face culling (área con signo del triángulo proyectado)
      *    area > 0 → vértices CCW → cara frontal
@@ -225,11 +259,79 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2) {
                bloquean lo que hay detrás de ellos                        */
             if (gs_alpha >= 1.0f) gs_zbuf[bidx] = depth;
 
+            /* Pesos perspectivamente correctos (pizarrón):
+               a_p = Σ(bᵢ·aᵢ/wᵢ) / Σ(bᵢ/wᵢ).
+               wsum > 0 garantizado: iw* > 0 (w>0 en project) y b* >= 0
+               dentro del triángulo.                                     */
+            float wsum     = b0*iw0 + b1*iw1 + b2*iw2;
+            float inv_wsum = 1.0f / wsum;
+            float p0 = b0*iw0 * inv_wsum;
+            float p1 = b1*iw1 * inv_wsum;
+            float p2 = b2*iw2 * inv_wsum;
+
             vec3 c;
-            c.x = b0*v0->color.x + b1*v1->color.x + b2*v2->color.x;
-            c.y = b0*v0->color.y + b1*v1->color.y + b2*v2->color.y;
-            c.z = b0*v0->color.z + b1*v1->color.z + b2*v2->color.z;
-            poke(px, py, vec3_to_argb(c)); 
+            c.x = p0*v0->color.x + p1*v1->color.x + p2*v2->color.x;
+            c.y = p0*v0->color.y + p1*v1->color.y + p2*v2->color.y;
+            c.z = p0*v0->color.z + p1*v1->color.z + p2*v2->color.z;
+
+            if (lit) {
+                /* (n, P) del fragmento, interpolados perspectiva-correctos */
+                vec3 P, N;
+                P.x = p0*Pw0.x + p1*Pw1.x + p2*Pw2.x;
+                P.y = p0*Pw0.y + p1*Pw1.y + p2*Pw2.y;
+                P.z = p0*Pw0.z + p1*Pw1.z + p2*Pw2.z;
+                N.x = p0*Nw0.x + p1*Nw1.x + p2*Nw2.x;
+                N.y = p0*Nw0.y + p1*Nw1.y + p2*Nw2.y;
+                N.z = p0*Nw0.z + p1*Nw1.z + p2*Nw2.z;
+                N = vec3_normalize(N);
+
+                /* Dirección a la luz L e influencia (atenuación):
+                   w=1 luz de punto  → L = normalize(pos − P),
+                                       infl = (1/dist)^f
+                   w=0 direccional   → L = normalize(pos) (pos = dirección),
+                                       infl = 1 (sin atenuación)            */
+                vec3  L;
+                float infl = 1.0f;
+                if (gs_light.w >= 0.5f) {
+                    vec3 Lv = {0.0f, 0.0f, 0.0f}; /* scratch */
+                    Lv = vec3_sub(Lv, gs_light.pos, P);
+                    float dist = sqrtf(vec3_dot(Lv, Lv));
+                    L = vec3_normalize(Lv);
+                    if (gs_light.atten_f > 0.0f && dist > 1e-6f)
+                        infl = powf(1.0f / dist, gs_light.atten_f);
+                } else {
+                    L = vec3_normalize(gs_light.pos);
+                }
+
+                /* Difuso (Lambert): I_d = max(N·L,0) · infl */
+                float d = vec3_dot(N, L);
+                if (d < 0.0f) d = 0.0f;
+                d *= infl;
+
+                /* Especular (Phong): R = reflejo de L sobre N,
+                   V = dir. a la cámara, I_e = max(R·V,0)^e · infl.
+                   Solo si la cara está iluminada (N·L > 0).            */
+                float s = 0.0f;
+                if (vec3_dot(N, L) > 0.0f) {
+                    vec3 R = {0.0f, 0.0f, 0.0f};   /* scratch */
+                    vec3 Vv = {0.0f, 0.0f, 0.0f};  /* scratch */
+                    R  = vec3_reflect(R, N, L);
+                    Vv = vec3_normalize(vec3_sub(Vv, gs_camPos, P));
+                    float rv = vec3_dot(R, Vv);
+                    if (rv > 0.0f)
+                        s = powf(rv, gs_material.shininess) * infl;
+                }
+
+                /* C_final = base·(C_a·I_a + L·I_d) + C_e·L·I_e */
+                c.x = c.x*(gs_light.ambient.x + gs_light.color.x*d)
+                    + gs_material.specular.x * gs_light.color.x * s;
+                c.y = c.y*(gs_light.ambient.y + gs_light.color.y*d)
+                    + gs_material.specular.y * gs_light.color.y * s;
+                c.z = c.z*(gs_light.ambient.z + gs_light.color.z*d)
+                    + gs_material.specular.z * gs_light.color.z * s;
+                c = vec3_clamp(c, 0.0f, 1.0f);
+            }
+            poke(px, py, vec3_to_argb(c));
         }
     }
 }
@@ -249,7 +351,8 @@ void gs_DrawArrays(u32 prim_type, Vert *v_arr, u32 v_count) {
             break;
         case GS_TYPE_TRIANGLES:
             for (i=0; i+2<v_count; i+=3)
-                __gs_DrawTriangle(&v_arr[i], &v_arr[i+1], &v_arr[i+2]);
+                __gs_DrawTriangle(&v_arr[i], &v_arr[i+1], &v_arr[i+2],
+                                  NULL, NULL, NULL);
             break;
         default: break;
     }
@@ -272,7 +375,38 @@ void gs_DrawElems(u32 prim_type, Vert *v_arr, u32 v_count,
             for (i=0; i+2<i_count; i+=3)
                 __gs_DrawTriangle(&v_arr[i_arr[i]],
                                   &v_arr[i_arr[i+1]],
-                                  &v_arr[i_arr[i+2]]);
+                                  &v_arr[i_arr[i+2]],
+                                  NULL, NULL, NULL);
+            break;
+        default: break;
+    }
+}
+
+/* Como gs_DrawElems pero con normales por vértice (array paralelo, mismos
+   índices). La normalMat(M) se calcula una sola vez por draw. La iluminación
+   solo se aplica si gs_SetLighting(1) está activo (ver __gs_DrawTriangle). */
+void gs_DrawElemsLit(u32 prim_type, Vert *v_arr, u32 v_count,
+                     u32 *i_arr, u32 i_count, vec3 *n_arr) {
+    (void)v_count;
+    mat4_normalMat(gs_normalMat, gs_matM);
+    u32 i;
+    switch (prim_type) {
+        case GS_TYPE_POINT:
+            for (i=0; i<i_count; i++)
+                __gs_DrawPoint(&v_arr[i_arr[i]]);
+            break;
+        case GS_TYPE_LINES:
+            for (i=0; i+1<i_count; i+=2)
+                __gs_DrawLine(&v_arr[i_arr[i]], &v_arr[i_arr[i+1]]);
+            break;
+        case GS_TYPE_TRIANGLES:
+            for (i=0; i+2<i_count; i+=3)
+                __gs_DrawTriangle(&v_arr[i_arr[i]],
+                                  &v_arr[i_arr[i+1]],
+                                  &v_arr[i_arr[i+2]],
+                                  &n_arr[i_arr[i]],
+                                  &n_arr[i_arr[i+1]],
+                                  &n_arr[i_arr[i+2]]);
             break;
         default: break;
     }

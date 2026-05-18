@@ -260,12 +260,26 @@ int main(int argc, char **argv) {
     if (show_model) {
       /* Modelo .tdm: opaco, z-buffer activo. Sin back-face culling
        * (cull=0) porque el winding de una malla externa es desconocido;
-       * así se ve siempre. Iluminación/texturas vendrán después. */
+       * así se ve siempre. Iluminación Phong difusa+ambiente (espacio
+       * mundo, por fragmento); luz de punto fija en mundo. */
+      GsLight luz = {
+          {1.5f, 1.8f, 2.5f},     /* pos en mundo (w=1) */
+          {2.4f, 2.4f, 2.4f},     /* color de luz L (sube por la atenuación) */
+          {0.15f, 0.15f, 0.15f},  /* ambiente C_a·I_a */
+          1.0f,                   /* w=1 → luz de punto (w=0 sería sol) */
+          1.0f};                  /* atenuación f en (1/dist)^f */
+      GsMaterial mat = {{0.7f, 0.7f, 0.7f}, /* C_e color del brillo */
+                        24.0f};             /* e exponente especular */
       gs_SetAlpha(1.0f);
       gs_SetLineDepthTest(1);
       gs_SetBackfaceCull(0);
-      gs_DrawElems(GS_TYPE_TRIANGLES, model.verts, model.n_verts,
-                   model.index, model.n_index);
+      gs_SetCameraPos(eye);
+      gs_SetLight(luz);
+      gs_SetMaterial(mat);
+      gs_SetLighting(1);
+      gs_DrawElemsLit(GS_TYPE_TRIANGLES, model.verts, model.n_verts,
+                      model.index, model.n_index, model.normal);
+      gs_SetLighting(0); /* deja el estado limpio para otras ramas */
     } else if (use_ortho) {
       /* MODO ORTOGONAL: Caras OPACAS con backface culling: cada píxel lo dibuja un triángulo → sin diagonal */
       gs_SetAlpha(1.0f);
