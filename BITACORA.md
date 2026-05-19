@@ -1,19 +1,22 @@
-# Bitácora — pipeline gráfico por software
+# Bitácora — Pipeline Gráfico por Software
+**Trabajo Terminal | ESCOM-IPN**
 
-Diario del trabajo: desde la corrección de bugs y el algoritmo del pintor
-hasta la iluminación actual. Las fórmulas se escriben **desarrolladas** (sin
-notación Σ). Convención de rutas: `plantilla/src`, `plantilla/include`.
+Registro del desarrollo: decisiones de diseño, fórmulas del pizarrón y su
+correspondencia directa con el código. Las fórmulas se escriben **desarrolladas**
+(sin notación Σ). Rutas relativas a la raíz del repositorio.
 
 ---
 
-## Parte A — Pizarrón → implementación
+## Parte A — Pizarrón → Implementación
 
-Cada concepto del pizarrón, su fórmula, el estado (✅ hecho / 🟡 parcial /
-❌ falta) y **cómo/dónde** lo implementamos.
+Cada concepto muestra: la fórmula del pizarrón, el estado ([x] / [-] / [ ]) y
+exactamente **dónde y cómo** vive en el código.
 
-### A.1 Interpolación perspectivamente correcta — ✅
+---
 
-**Fórmula (desarrollada):**
+### A.1 Interpolación perspectivamente correcta — [x]
+
+**Del pizarrón:**
 
 ```
 a_p = (b0·a0/w0 + b1·a1/w1 + b2·a2/w2)
@@ -21,326 +24,354 @@ a_p = (b0·a0/w0 + b1·a1/w1 + b2·a2/w2)
             (b0/w0 + b1/w1 + b2/w2)
 ```
 
-donde `b0,b1,b2` son las baricéntricas y `w0,w1,w2` la `w` de clip de cada
-vértice. `a_p` es el atributo interpolado del fragmento.
+`b0,b1,b2` = coordenadas baricéntricas del fragmento;
+`w0,w1,w2` = componente `w` de clip de cada vértice;
+`a_p` = valor interpolado del atributo en el fragmento.
 
-**Cómo/dónde:** en [project()](plantilla/src/gs.c) se dejó de descartar la `w`
-del vértice: ahora devuelve también `1/w`. En `__gs_DrawTriangle`, dentro del
-bucle por píxel, se calcula el denominador `wsum = b0/w0 + b1/w1 + b2/w2` y los
-pesos perspectiva `p0,p1,p2` (cada `bᵢ/wᵢ` dividido entre `wsum`); el color
-base se interpola con `p0,p1,p2` en vez de las baricéntricas crudas. La
-**profundidad** se deja en interpolación afín a propósito (z/w ya es lineal en
-pantalla; es lo correcto para el z-buffer).
+**Implementación:**
 
-### A.2 Pipeline y espacios — ✅
+- [`plantilla/src/gs.c`](plantilla/src/gs.c) — `project()`: conserva `1/w`
+  por vértice (`iw0,iw1,iw2`).
+- `__gs_DrawTriangle`, bucle por píxel: calcula `wsum = b0/w0 + b1/w1 + b2/w2`
+  y los pesos `p0,p1,p2 = bᵢ/wᵢ ÷ wsum`; color, normales y UV se interpolan
+  con `p0,p1,p2` en vez de las baricéntricas crudas.
+- La **profundidad** usa interpolación afín a propósito (`z/w` ya es lineal en
+  pantalla; es la convención correcta para el z-buffer).
 
-**Pizarrón:** Aplicación → shader de vértices → rasterizador → shader de
-fragmentos → framebuffer. Espacios: local → mundo → vista → clip → pantalla.
-Buffer constante (luz/material/vista). El fragmento lleva `(n, P)`.
-Cálculo de iluminación en espacio global:
-`P = M·pos`, `luz = l`, `vista = P − C`, `n = normalMat(M)·normal`.
+→ Ver nota [E.2](#e2-phong-vs-gouraud) para por qué reutilizar estos pesos
+fue clave al añadir iluminación.
 
-**Cómo/dónde:** matrices M/V/P y `recalc_MVP` en [gs.c](plantilla/src/gs.c);
-se fijan desde [main.c](plantilla/src/main.c) cada frame. El "buffer
-constante" se modeló como `GsLight` + `GsMaterial` + `gs_SetLight` /
-`gs_SetMaterial` / `gs_SetCameraPos` / `gs_SetLighting`
-([gs.h](plantilla/include/gs.h), gs.c). El fragmento recibe `(n, P)`
-interpolados en `__gs_DrawTriangle`. Se eligió **espacio mundo**:
-`P = M·pos`, `n = normalMat(M)·normal`, `vista = P − C` (con
-`gs_SetCameraPos`). Ver detalle de etapas en la Parte D.
+---
 
-### A.3 Componente difuso (Lambert) — ✅
+### A.2 Pipeline y espacios — [x]
 
-**Fórmula:** el coseno del ángulo entre la luz `l` y la normal `n`:
+**Del pizarrón:**
 
 ```
-cos θ = (l·n) / (|l|·|n|)      con l, n normalizados →   cos θ = l·n
+Aplicación → vert shader → rasterizador → frag shader → framebuffer
+
+Local → Mundo (×M) → Vista (×V) → Clip (×P) → NDC (÷w) → Pantalla
+```
+
+Buffer constante: Luz, Material, Cámara, Textura.
+El fragmento lleva `(n, P)` para iluminación en espacio mundo:
+`P = M·pos`, `n = normalMat(M)·normal`, `vista = P − C`.
+
+**Implementación:**
+
+- Matrices `M/V/P` y `recalc_MVP` en [`plantilla/src/gs.c`](plantilla/src/gs.c);
+  se actualizan desde [`plantilla/src/main.c`](plantilla/src/main.c) cada frame.
+- Buffer constante → variables `static` en `gs.c`: `GsLight`, `GsMaterial`,
+  `gs_camPos`, `GsTexture`, escritas con `gs_Set*`
+  (declaradas en [`plantilla/include/gs.h`](plantilla/include/gs.h)).
+- El fragmento recibe `(n, P)` interpolados en `__gs_DrawTriangle`.
+- Se eligió **espacio mundo** (ver [E.3](#e3-espacio-mundo-vs-espacio-vista)).
+
+Tabla de etapas detallada → [Parte D](#parte-d--etapas-del-pipeline).
+
+---
+
+### A.3 Componente difusa (Lambert) — [x]
+
+**Del pizarrón:**
+
+```
+cos θ = l·n          (l, n normalizados)
 I_d   = max(l·n, 0)
-C_d   = base · max(l·n, 0) · L_d
+C_d   = base · I_d · L_d
 ```
 
-**Cómo/dónde:** rama `lit` de `__gs_DrawTriangle` en
-[gs.c](plantilla/src/gs.c). Por píxel se interpolan (perspectiva) la posición
-mundo `P` y la normal mundo `N` (renormalizada); `L = normalize(luz.pos − P)`;
-`d = max(N·L, 0)`; `color = base · (ambiente + L_d·d)`, con clamp a [0,1]. Se
-activa con `gs_DrawElemsLit` desde la rama `show_model` de
-[main.c](plantilla/src/main.c).
+**Implementación:**
 
-### A.4 Componente especular — ✅
+- Rama `lit` de `__gs_DrawTriangle` ([gs.c](plantilla/src/gs.c)).
+- Por fragmento: `L = normalize(luz.pos − P)`;
+  `d = max(N·L, 0)`;
+  `color += base · L · d`.
+- Se activa con `gs_DrawElemsLit` desde la rama `show_model` de
+  [main.c](plantilla/src/main.c).
 
-**Fórmula:** `I_e = max((r·v)^e, 0)`, con `r` = reflexión de la luz sobre `n`,
-`v` = dirección a la cámara, `e` = constante de brillo (especularidad).
+→ Ver nota [E.2](#e2-phong-vs-gouraud).
 
-**Cómo/dónde:** rama `lit` de `__gs_DrawTriangle` en
-[gs.c](plantilla/src/gs.c). Solo si la cara está iluminada (`N·L > 0`):
-`R = vec3_reflect(N, L)`, `V = normalize(camPos − P)`,
-`s = max(R·V, 0)^material.shininess · infl`. La posición de cámara llega por
-el buffer constante con `gs_SetCameraPos(eye)` desde main.c (esto resuelve el
-`vista = P − C` del pizarrón).
+---
 
-### A.5 Color final — ✅
+### A.4 Componente especular — [x]
 
-**Fórmula:**
+**Del pizarrón:**
 
 ```
-C_final = C_e·I_e·L_e  +  C_d·I_d·L_d  +  C_a·I_a
-Material = (C_e, C_d, C_a, e)
+r = reflect(l, n) = 2·(n·l)·n − l
+I_e = max(r·v, 0)^e
 ```
 
-**Cómo/dónde:** los tres términos en la rama `lit` de `__gs_DrawTriangle`
-(gs.c): `C_final = base·(C_a·I_a + L·I_d) + C_e·L·I_e`, con clamp a [0,1].
-Existe el buffer constante `GsMaterial { vec3 specular(C_e); float
-shininess(e); }` con `gs_SetMaterial` (gs.h/gs.c). `C_d` y `C_a` siguen siendo
-el color de vértice del `.tdm` (material difuso/ambiente colapsado en el
-atributo de vértice); `L` = `GsLight.color`, `C_a·I_a` = `GsLight.ambient`.
+`r` = reflexión de la luz sobre `n`; `v` = dirección hacia la cámara; `e` = exponente.
 
-### A.6 Atenuación por distancia — ✅
+**Implementación:**
 
-**Fórmula:** `Influencia = (1 / dist(luz, P))^f` (f = "fuerza"). Multiplica
-tanto `I_d` como `I_e`.
+- Rama `lit` de `__gs_DrawTriangle` ([gs.c](plantilla/src/gs.c)).
+- Solo si `N·L > 0`:
+  `R = vec3_reflect(N, L)`;
+  `V = normalize(camPos − P)`;
+  `s = max(R·V, 0)^material.shininess · infl`.
+- `camPos` llega por buffer constante con `gs_SetCameraPos(eye)` (main.c).
 
-**Cómo/dónde:** rama `lit` de `__gs_DrawTriangle` (gs.c). Si `w=1` y
-`atten_f > 0`: `dist = |luz.pos − P|`, `infl = powf(1/dist, atten_f)`, y se
-multiplica a `d` (difuso) y `s` (especular). `atten_f` viene en `GsLight`;
-con `atten_f = 0` no hay atenuación. Se subió `GsLight.color` en main.c para
-compensar la atenuación.
+---
 
-### A.7 Tipo de luz — ✅
+### A.5 Color final (Phong completo) — [x]
 
-**Fórmula:** la luz se da como `l = (x, y, z, w)`; `w = 0` → luz direccional
-(el sol), `w = 1` → luz de punto (se usa `P − l`).
+**Del pizarrón:**
 
-**Cómo/dónde:** campo `w` en `GsLight`. En `__gs_DrawTriangle`: si
-`w ≥ 0.5` → luz de punto (`L = normalize(pos − P)`, con atenuación);
-si `w < 0.5` → direccional (`L = normalize(pos)`, `pos` es la dirección hacia
-la luz, sin atenuación). main.c usa hoy `w = 1`.
+```
+C_final = C_e·I_e·L  +  C_d·I_d·L  +  C_a·I_a
+```
 
-### A.8 Texturas (muestreo) — ❌ falta (apuntes del pizarrón)
+`C_e` = color especular del material; `C_d/C_a` = color difuso/ambiente;
+`L` = color de la luz; `I_a` = intensidad ambiente.
 
-Spec del pizarrón transcrita; aún no implementado.
+**Implementación:**
 
-**Espacio de texturas normalizado:** las coordenadas `(s, t)` van en
-`[0.0, 1.0]`, con origen abajo-izquierda; `(0,0)` esquina inferior izq,
-`(1,1)` superior derecha. La UV se interpola **perspectiva-correcta** como
-cualquier otro atributo del fragmento.
+- Rama `lit` de `__gs_DrawTriangle` ([gs.c](plantilla/src/gs.c)):
+  `C_final = base·(C_a·I_a + L·I_d) + C_e·L·I_e`, con clamp a [0,1].
+- `GsMaterial { vec3 specular (C_e); float shininess (e); }` con `gs_SetMaterial`.
+- `C_d / C_a` = color de vértice del `.tdm` (colapsados en el atributo);
+  `L` = `GsLight.color`; `C_a·I_a` = `GsLight.ambient`.
 
-**Struct de textura:**
+→ Ver nota [E.2](#e2-phong-vs-gouraud).
+
+---
+
+### A.6 Atenuación por distancia — [x]
+
+**Del pizarrón:**
+
+```
+Influencia = (1 / dist(luz, P))^f
+```
+
+`f` = exponente de fuerza. Multiplica tanto `I_d` como `I_e`.
+
+**Implementación:**
+
+- Rama `lit` de `__gs_DrawTriangle` ([gs.c](plantilla/src/gs.c)).
+- Si `w = 1` y `atten_f > 0`:
+  `dist = |luz.pos − P|`;
+  `infl = powf(1/dist, atten_f)`;
+  se multiplica a los términos difuso y especular.
+- `atten_f` en `GsLight`; con `atten_f = 0` → sin atenuación.
+
+---
+
+### A.7 Tipo de luz — [x]
+
+**Del pizarrón:**
+
+```
+l = (x, y, z, w)
+  w = 0  →  luz direccional (sol): L = normalize(pos)
+  w = 1  →  luz de punto:          L = normalize(pos − P), con atenuación
+```
+
+**Implementación:**
+
+- Campo `w` en `GsLight` ([gs.h](plantilla/include/gs.h)).
+- `__gs_DrawTriangle`: si `w ≥ 0.5` → luz de punto; si `w < 0.5` → direccional.
+- [main.c](plantilla/src/main.c) usa hoy `w = 1` (punto).
+
+---
+
+### A.8 Texturas (muestreo) — [x]
+
+**Del pizarrón:**
+
+Espacio de texturas normalizado `(s, t) ∈ [0, 1]`, origen abajo-izquierda.
+UV interpolada perspectiva-correcta como cualquier otro atributo del fragmento.
 
 ```
 typedef struct Texture_t {
-    u32  w;            // ancho en texels
-    u32  h;            // alto
+    u32  w, h;
     u32  filter;       // NEAREST | LINEAR
     u32  boundary_s;   // CLAMP | REPEAT | ESPEJO | COLOR_DEFECTO
     u32  boundary_t;
-    u32  pix_format;   // 8888ABGR, 888BGR, 565BGR, 565RGB, 1555ABGR…
-    u8  *data;         // píxeles
+    u32  pix_format;   // 8888ABGR, 888BGR, 565BGR …
+    u8  *data;
 } Texture;
 ```
 
-**¿Qué pasa si me salgo de la textura? (bordes):**
-- **Color por defecto:** devuelve un color fijo.
-- **REPEAT:** `s = fmod(s, 1.0)` (parte fraccionaria); igual con `t`.
-- **Espejo:** refleja en cada repetición.
-- **CLAMP:** `s = clamp(s, 0.0, 1.0)`; igual con `t`.
+Modos de borde:
+- **CLAMP:** `s = clamp(s, 0, 1)`
+- **REPEAT:** `s = s − floor(s)`
+- **ESPEJO:** refleja en cada repetición
+- **COLOR POR DEFECTO:** devuelve un color fijo
 
-**Desnormalizar** (de [0,1] a índices de texel):
-`s *= (tx->w − 1)`, `t *= (tx->h − 1)`.
+Desnormalizar: `s *= (w − 1)`, `t *= (h − 1)`
 
-**Filtro (¿qué texel devuelvo?):**
-- **NEAREST** — 1 consulta: `return tx->data[t·tx->w + s]`. Pixeleado.
-- **LINEAR (bilineal)** — 4 consultas + 3 interpolaciones: con
-  `frac_s = fmod(s, 1.0)` e `inc_s = (frac_s ≥ 0.5 ? 1 : −1)`,
-  tomar `a = data[t·w + s]`, `b = data[t·w + s + inc_s]`,
-  `ab = lerp(a, b, frac_s − 0.5)`; repetir el mismo par en la dirección `t`
-  y volver a interpolar. Suaviza.
+Filtros:
+- **NEAREST** — 1 consulta: `data[t·w + s]`. Pixeleado.
+- **LINEAR (bilineal)** — 4 consultas + 3 `lerp` (en s dos veces, luego en t). Suavizado.
 
-**Formato del pixel:** la textura puede venir empaquetada distinto
-(`u32` = 8A8B8G8R / 8888ABGR; `u16` = 5B6G5R / 565RGB; 1555ABGR). Hay que
-guardar `w`/`h` y `pix_format` para desempaquetar al consultar.
+Frag shader (pizarrón):
+```
+vec2 uv    = buffer_attrib.uv;
+vec4 color = sampleTex(tex, uv);
+return color;
+```
 
-**Frag shader (pizarrón):**
-`vec2 uv = buffer_attrib.uv;  vec4 color = sampleTex(tex, uv);  return color;`
-La textura es parte del **buffer constante** (uniforms); la UV es un
-**atributo por-vértice**.
+**Implementación:**
 
-**Dónde irá en NUESTRO pipeline (pendiente):**
-[tdm.c](plantilla/src/tdm.c) ya parsea `model.texcoord` (las UV del `.tdm`,
-hoy sin uso). Falta: (a) llevar la UV al fragmento — array paralelo como se
-hizo con las normales en `gs_DrawElemsLit`, o ampliar `Vert`; (b) un struct
-`Texture` + cargador del `bob_esponja/bob_esponja_tex.bmp`; (c) muestrear en
-la rama del shader de fragmentos de `__gs_DrawTriangle` interpolando la UV con
-los pesos perspectiva `p0,p1,p2` y multiplicar el texel por el color
-iluminado.
+- `GsTexture { u32 w,h; u8 *data; int filter; int wrap; }` + `gs_SetTexture`
+  ([gs.h](plantilla/include/gs.h) / [gs.c](plantilla/src/gs.c)) — buffer constante,
+  mismo patrón que `GsLight`/`GsMaterial`.
+- Cargador BMP genérico [bmp.c](plantilla/src/bmp.c) / [bmp.h](plantilla/include/bmp.h):
+  valida 24bpp BI_RGB, guarda bottom-up con stride alineado a 4 bytes.
+  El asset resultó en orden RGB (no BGR) → `tex_texel` lee `p[0]=R, p[1]=G, p[2]=B`.
+- UV entra por **array paralelo** `t_arr` (`model.texcoord`, ya parseado por `tdm.c`);
+  `gs_DrawElemsLit` recibe el parámetro `t_arr`.
+- En `__gs_DrawTriangle`: `tex_wrap` (CLAMP/REPEAT/espejo) → desnormalizar
+  `s·(w−1)`, `t·(h−1)` → `tex_sample` NEAREST o LINEAR. UV interpolada con
+  `p0,p1,p2`. El texel **reemplaza el color base** antes del bloque de luz →
+  Phong lo modula: `final = texel·(C_a·I_a + L·I_d) + C_e·L·I_e`.
+- [main.c](plantilla/src/main.c) rama `show_model`: `bmp_Load` de
+  `bob_esponja_tex.bmp` (LINEAR, REPEAT), `gs_SetTexture`,
+  `gs_DrawElemsLit(... model.normal, model.texcoord)`.
 
 ---
 
-## Parte B — Cronología del trabajo
+## Parte B — Historial de implementación
 
-1. **Corrección de bugs de compilación.** En [gs.c](plantilla/src/gs.c) el
-   bloque de declaraciones `static` (framebuffer, viewport, matrices, flags)
-   estaba textualmente revuelto e impedía compilar. Se reordenó. Resultado:
-   compila limpio.
+1. **Corrección de bugs de compilación.** El bloque de declaraciones `static`
+   en [gs.c](plantilla/src/gs.c) estaba revuelto e impedía compilar. Se reordenó.
 
-2. **"Se enciman los colores" → algoritmo del pintor.** Diagnóstico: no era un
-   bug, era la transparencia del 40 % intencional. La inestabilidad al girar
-   venía de que las caras transparentes **no escriben el z-buffer** (gs.c), así
-   que la mezcla dependía del orden de los índices, no de la profundidad.
-   Solución en la rama perspectiva del cubo de [main.c](plantilla/src/main.c):
-   se calcula el centroide de cada cara en espacio cámara, se ordenan por z
-   (insertion sort), se reconstruyen los índices (`sorted_idx`) y se dibujan
-   de atrás hacia adelante (painter's algorithm). Decisión del usuario:
-   mantener alpha 0.4.
+2. **Algoritmo del pintor (transparencia estable).** La inestabilidad al girar
+   el cubo transparente venía de que las caras no escriben el z-buffer. Solución
+   en la rama perspectiva de [main.c](plantilla/src/main.c): centroide de cada
+   cara en espacio cámara, insertion sort por z, reconstrucción de `sorted_idx`,
+   dibujo de atrás hacia adelante. Alpha fijo en 0.4.
 
-3. **Lector `.tdm` + versionado git (hito de soporte).** Se inicializó git
-   como red de seguridad (con `.gitignore` para artefactos de build y la
-   `libosw/` externa). Se creó el módulo genérico
+3. **Lector `.tdm` + versionado git.** Git inicializado con `.gitignore` para
+   artefactos de build y `libosw/`. Módulo genérico
    [tdm.c](plantilla/src/tdm.c) / [tdm.h](plantilla/include/tdm.h): parsea
-   posición, color, normal y texcoord, valida el formato y normaliza la
-   geometría al tamaño del cubo unitario. Selección por argumento de línea de
-   comandos (`prog.exe <ruta.tdm>`; sin args = cubo). Relevante para lo que
-   sigue porque la iluminación consume `model.normal`.
+   posición, color, normal y texcoord; normaliza la geometría al cubo unitario.
+   Carga por argumento de línea de comandos (`prog.exe <ruta.tdm>`).
 
-4. **Interpolación perspectiva.** Ver Parte A.1.
+4. **Interpolación perspectiva.** Ver [A.1](#a1-interpolación-perspectivamente-correcta----).
 
-5. **Iluminación Phong difusa + ambiente.** Ver Parte A.2/A.3/A.5. Resumen:
-   `GsLight` como buffer constante; `gs_DrawElemsLit` toma un array paralelo
-   de normales y calcula `normalMat(M)` una sola vez por draw; iluminación por
-   fragmento en espacio mundo; aplicada **solo al `.tdm`** (el cubo quedó
-   intacto, sin regresión).
+5. **Phong difuso + ambiente.** Ver [A.2](#a2-pipeline-y-espacios----) /
+   [A.3](#a3-componente-difusa-lambert----) / [A.5](#a5-color-final-phong-completo----).
+   `gs_DrawElemsLit` con array paralelo de normales; `normalMat(M)` calculado
+   una sola vez por draw. Solo en el `.tdm`; cubo sin regresión.
 
-6. **Phong completo del pizarrón.** Se añadió el especular (`vec3_reflect`,
-   `gs_SetCameraPos`), el buffer `GsMaterial` (`C_e`, `e`), la atenuación
-   `(1/dist)^f` y el tipo de luz por `w` (direccional/punto). El color final
-   ya es `C_e·I_e·L + C_d·I_d·L + C_a·I_a`. Sigue solo en el `.tdm`.
+6. **Phong completo.** Especular (`vec3_reflect`, `gs_SetCameraPos`), buffer
+   `GsMaterial`, atenuación `(1/dist)^f`, tipo de luz por `w`. Ver
+   [A.4](#a4-componente-especular----) – [A.7](#a7-tipo-de-luz----).
 
----
-
-## Parte C — Qué falta
-
-- **`C_d`/`C_a` como material real** separado del color de vértice (hoy el
-  difuso/ambiente sale del atributo de vértice del `.tdm`; `GsMaterial` solo
-  lleva `C_e` y `e`).
-- **Varias luces** (hoy una sola; el modelo soporta direccional o punto vía
-  `w` pero no acumula múltiples).
-- **Texturas:** las UV ya se parsean en el `.tdm`, pero `Vert` no las lleva
-  ni se muestrea la textura `bob_esponja/bob_esponja_tex.bmp`. Spec completa
-  en **A.8**.
-- **Mallas externas:** winding mixto / sombreado a dos caras (hoy `cull=0`,
-  las caras opuestas a la luz quedan solo en ambiente).
-- **Iluminación en el cubo** (hoy solo en el `.tdm`).
-- Opcional: interpolación perspectiva también en líneas y puntos.
+7. **Texturas.** Módulo `bmp.c/bmp.h`, `GsTexture` + `gs_SetTexture`, UV por
+   array paralelo, `tex_sample` con CLAMP/REPEAT/espejo y NEAREST/LINEAR.
+   UV perspectiva-correcta; texel modulado por Phong. Solo en el `.tdm`.
+   Ver [A.8](#a8-texturas-muestreo----).
 
 ---
 
-## Parte D — Notas de conceptos (a qué etapa pertenece cada cosa)
+## Parte C — Pendiente
+
+- `C_d`/`C_a` como material real separado del color de vértice.
+- Múltiples luces (hoy: una sola, direccional o punto vía `w`).
+- Texturas en el cubo y formatos de pixel adicionales (hoy: solo `.tdm`, 24bpp BI_RGB).
+- Mallas con winding mixto / sombreado a dos caras.
+- Iluminación en el cubo (hoy: solo en el `.tdm`).
+
+---
+
+## Parte D — Etapas del Pipeline
 
 Este renderer es por software (sin GPU); las "etapas" son funciones en
 [gs.c](plantilla/src/gs.c).
 
-| Etapa | Qué hace aquí | Dónde |
+| Etapa | Función | Dónde |
 |---|---|---|
-| **Aplicación** | Define geometría (cubo / modelo `.tdm`), matrices M/V/P por frame, y la luz. Decide qué dibujar y el estado (`gs_Set*`). | [main.c](plantilla/src/main.c) |
-| **Buffer constante / uniforms** | Estado global, no por-vértice: luz, material y posición de cámara (y, a futuro, textura). | `GsLight`/`GsMaterial`/`gs_camPos` + `gs_SetLight`/`gs_SetMaterial`/`gs_SetCameraPos`/`gs_SetLighting` (gs.h/gs.c) |
-| **Shader de vértices** | Transforma cada vértice por MVP, calcula `1/w`; si hay luz, `P = M·pos` y `n = normalMat(M)·normal`. | `project()` + parte por-vértice de `__gs_DrawTriangle` (gs.c) |
-| **Rasterizador** | Back-face culling (área con signo), bounding box recortado al viewport, baricéntricas (`edge_fn`), test de profundidad (z-buffer). | `__gs_DrawTriangle` (gs.c) |
-| **Shader de fragmentos** | Pesos perspectiva `p0,p1,p2`, interpolación de color y de `(n,P)`, iluminación difusa+ambiente, clamp. | bucle por píxel de `__gs_DrawTriangle` (gs.c) |
-| **Framebuffer / merge** | Escribe el píxel con alpha blending y z-buffer. | `poke` + `gs_zbuf` (gs.c) |
+| **Aplicación** | Define geometría, matrices M/V/P por frame, estado (`gs_Set*`). | [main.c](plantilla/src/main.c) |
+| **Buffer constante** | Estado global por draw: luz, material, cámara, textura. | `GsLight`/`GsMaterial`/`gs_camPos`/`GsTexture` + setters (gs.h/gs.c) |
+| **Shader de vértices** | Transforma por MVP, calcula `1/w`; si hay luz: `P = M·pos`, `n = normalMat(M)·normal`. | `project()` + parte por-vértice de `__gs_DrawTriangle` (gs.c) |
+| **Rasterizador** | Back-face culling (área con signo), bounding box recortado al viewport, baricéntricas (`edge_fn`), z-buffer. | `__gs_DrawTriangle` (gs.c) |
+| **Shader de fragmentos** | Pesos perspectiva `p0,p1,p2`, interpolación de color/`(n,P)`/UV, textura, Phong, clamp. | Bucle por píxel de `__gs_DrawTriangle` (gs.c) |
+| **Framebuffer / merge** | Alpha blending y escritura con z-buffer. | `poke` + `gs_zbuf` (gs.c) |
 
-**Los espacios (y dónde ocurren):**
+**Espacios:**
 
-- **Local / modelo:** vértices tal cual (cubo hardcodeado; el `.tdm` ya viene
-  normalizado por `tdm_Load`).
-- **Mundo:** ×M. Aquí se hace la iluminación (decisión: espacio global):
-  `P = M·pos`, `n = normalMat(M)·normal`.
-- **Vista / cámara:** ×V (`mat4_lookAt` en main.c). El algoritmo del pintor
-  del cubo usa la z en este espacio (centroide de cara).
-- **Clip:** ×P; aparece la `w` (la que usa la interpolación perspectiva).
-- **NDC** (Normalized Device Coordinates / coordenadas normalizadas de
-  dispositivo): resultado de dividir clip ÷w (`vec3_homogenize` en
-  `project`). Es un cubo canónico con cada eje en el rango [-1, 1],
-  independiente de la resolución de pantalla, justo antes de convertir a
-  píxeles.
-- **Pantalla:** mapeo al viewport (en `project`).
-- `recalc_MVP()` precompone `P·V·M`; las matrices se fijan con
-  `gs_SetModelMatrix` / `gs_SetViewMatrix` / `gs_SetProjMatrix`.
+| Espacio | Transformación | Uso |
+|---|---|---|
+| **Local** | — | Vértices del modelo tal cual |
+| **Mundo** | ×M | Iluminación: `P = M·pos`, `n = normalMat(M)·normal` |
+| **Vista** | ×V | Centroide para painter's algorithm (cubo) |
+| **Clip** | ×P | Genera la `w` que usa la interpolación perspectiva |
+| **NDC** | ÷w | Cubo canónico [-1,1] independiente de resolución |
+| **Pantalla** | mapeo viewport | Píxeles finales |
 
-**Atributo por-vértice vs constante:** `pos`, `color` y (vía array paralelo)
-`normal` son **por-vértice** y se interpolan en el fragmento; la luz y el
-material son **constantes** (buffer constante), iguales para todos los
-fragmentos de un mismo draw.
+**NDC** (Normalized Device Coordinates): resultado de `clip ÷ w`
+(`vec3_homogenize` en `project`). Coordenadas normalizadas de dispositivo:
+cada eje en [-1, 1], independiente de la resolución, justo antes de mapear a píxeles.
+
+**Atributo por-vértice vs constante:** `pos`, `color`, `normal`, `UV` son
+**por-vértice** (uno por vértice, se interpolan en el fragmento).
+Luz, material y textura son **constantes** (igual para todos los fragmentos del draw).
 
 ---
 
-## Parte E — Conceptos ampliados
+## Parte E — Notas conceptuales
 
 ### E.1 Buffer constante (uniforms): pizarrón → código
 
-**Pizarrón:** existe un "buffer constante / uniforms" con **Luz, Material**
-(y, a futuro, **Textura**). El `frag_shader(x, y, buffer_attrib)` lee ese
-estado: lo *constante* viene del buffer; lo *por-vértice* (UV, etc.) viene
-interpolado en `buffer_attrib`.
+**Del pizarrón:** existe un "buffer constante / uniforms" con **Luz, Material**
+(**Textura** implementada — ver [A.8](#a8-texturas-muestreo----)).
+El `frag_shader(x, y, buffer_attrib)` lee ese estado: lo *constante* viene del
+buffer; lo *por-vértice* (UV, etc.) viene interpolado en `buffer_attrib`.
 
-**Cómo lo pusimos en código:** el buffer constante son variables `static` en
-[gs.c](plantilla/src/gs.c) — `GsLight gs_light`, `GsMaterial gs_material`,
-`vec3 gs_camPos`, `int gs_lighting` — escritas con los setters
-`gs_SetLight` / `gs_SetMaterial` / `gs_SetCameraPos` / `gs_SetLighting`
-(declarados en [gs.h](plantilla/include/gs.h)). [main.c](plantilla/src/main.c)
-los fija una vez por frame antes del `gs_DrawElemsLit`; la rama `lit` de
-`__gs_DrawTriangle` los lee igual para todos los fragmentos del draw.
+**En el código:** variables `static` en [gs.c](plantilla/src/gs.c):
+`GsLight gs_light`, `GsMaterial gs_material`, `vec3 gs_camPos`,
+`GsTexture *gs_tex`, `int gs_lighting`. Escritas con
+`gs_SetLight` / `gs_SetMaterial` / `gs_SetCameraPos` / `gs_SetTexture` /
+`gs_SetLighting` ([gs.h](plantilla/include/gs.h)).
+[main.c](plantilla/src/main.c) los fija una vez por frame antes del draw;
+`__gs_DrawTriangle` los lee igual para todos los fragmentos.
 
-**Constante vs por-vértice:** `pos`, `color`, `normal` son **por-vértice**
-(uno por vértice, se interpolan). Luz, material y cámara son **constantes**
-(un valor por draw). La diferencia es clave: el costo de cambiar un uniform es
-ínfimo; un atributo nuevo implica tocar el formato de vértice / un array
-paralelo.
+**Por-vértice vs constante:** `pos`, `color`, `normal` son **por-vértice**
+(un valor por vértice, se interpolan). Luz, material, cámara y textura son
+**constantes** (un valor por draw). Cambiar un uniform es gratuito; un atributo
+nuevo implica tocar el formato de vértice o añadir un array paralelo.
 
-### E.2 Phong vs Gouraud (relación con el pizarrón)
+### E.2 Phong vs Gouraud
 
-El pizarrón dibuja el pipeline como **shader de vértices → rasterizador →
-shader de fragmentos**, y marca que el fragmento lleva `(n, P)`. Ahí está
-exactamente la diferencia entre los dos modelos de sombreado:
+El pizarrón marca el pipeline como **vert shader → rasterizador → frag shader**
+y especifica que el fragmento lleva `(n, P)`. Ahí está la diferencia:
 
-- **Gouraud (por vértice):** la iluminación se evalúa en el **shader de
-  vértices**, una vez por cada uno de los 3 vértices; el rasterizador
-  **interpola el color ya iluminado**. Barato (3 evaluaciones por triángulo),
-  pero el brillo especular se "rompe"/facetea en mallas de pocos polígonos
-  porque el pico del especular puede caer entre vértices y perderse.
-- **Phong (por fragmento):** el shader de vértices solo prepara `(n, P)`; el
-  rasterizador **interpola `n` y `P`**, y la iluminación se evalúa en el
-  **shader de fragmentos**, una vez por píxel. Más caro, pero el especular y
-  la curvatura salen suaves y correctos.
+- **Gouraud (por vértice):** iluminación evaluada en el *vert shader* (3 veces
+  por triángulo); el rasterizador interpola el **color ya iluminado**. Barato,
+  pero el especular se pierde/facetea en mallas de pocos polígonos.
+- **Phong (por fragmento):** el *vert shader* solo prepara `(n, P)`; el
+  rasterizador interpola `n` y `P`; la iluminación se evalúa en el *frag shader*
+  (una vez por píxel). Más costoso, pero el especular y la curvatura salen correctos.
 
-**Qué elegimos y dónde:** **Phong por fragmento**. En
-[gs.c](plantilla/src/gs.c), `__gs_DrawTriangle` calcula `P` y `n` en mundo por
-vértice (parte "shader de vértices") y, en el bucle por píxel, interpola
-`(n, P)` con los pesos perspectiva `p0,p1,p2` y evalúa difuso+especular+
-ambiente (parte "shader de fragmentos"). Reusar esos pesos es lo que hace
-barato el salto a Phong. Gouraud no se implementó; habría requerido evaluar la
-luz antes de rasterizar e interpolar solo el color (como ya se interpola hoy
-el color base).
+**Decisión:** **Phong por fragmento.** En `__gs_DrawTriangle` ([gs.c](plantilla/src/gs.c)):
+`P` y `n` se calculan por vértice (parte "vert shader"), se interpolan con
+`p0,p1,p2` y el Phong se evalúa en el bucle por píxel (parte "frag shader").
+Los pesos perspectiva ya existían de [A.1](#a1-interpolación-perspectivamente-correcta----),
+por lo que el salto a Phong no requirió infraestructura nueva.
 
-### E.3 Diferencia: espacio mundo vs espacio vista
+### E.3 Espacio mundo vs espacio vista
 
-El pizarrón da las dos formas de hacer el mismo cálculo (todo desarrollado):
+El pizarrón presenta las dos formas equivalentes:
 
-- **Global / mundo:** `P = M·Vin`, `luz = l`, `vista = P − C`,
-  `n = normalMat(M)·normal`.
-- **Vista / cámara:** `P = V·M·Vin`, `luz = V·l`, `vista = −P` (la cámara
-  está en el origen), `n = normalMat(V·M)·normal`.
+| | Espacio mundo | Espacio vista |
+|---|---|---|
+| Posición fragmento | `P = M·Vin` | `P = V·M·Vin` |
+| Dirección luz | `L = normalize(luz.pos − P)` | `L = normalize(V·luz.pos − P)` |
+| Dirección vista | `V = normalize(camPos − P)` | `V = normalize(−P)` (cámara en origen) |
+| Normal | `n = normalMat(M)·n_local` | `n = normalMat(V·M)·n_local` |
 
-**Diferencias prácticas:**
-- En **vista** no hace falta pasar la posición de cámara (el vector vista es
-  `−P` porque la cámara está en el origen), pero **la luz debe transformarse
-  por `V` cada frame** (la `V` cambia con el zoom/cámara).
-- En **mundo** la luz se define en coordenadas intuitivas y **no** se toca al
-  mover la cámara, pero el especular **necesita la posición de cámara**
-  (`vista = P − C`).
-- Las normales se transforman con `normalMat` de `M` (mundo) o de `V·M`
-  (vista); en ambos casos es la traspuesta de la inversa de la 3×3.
+**En vista:** no hace falta pasar la posición de cámara, pero **la posición de
+luz debe transformarse por `V` cada frame**.
+**En mundo:** la luz se define en coordenadas intuitivas y no cambia al mover
+la cámara, pero el especular **necesita `camPos`** (`vista = P − C`).
 
-**Qué elegimos e implicaciones en el código:** **espacio mundo**. Por eso en
-[gs.c](plantilla/src/gs.c): existe `gs_camPos` + `gs_SetCameraPos` (se usa en
-`vista = camPos − P`); la luz **no** se multiplica por `V` (se usa
-`gs_light.pos` tal cual); y `gs_normalMat` se calcula con
-`mat4_normalMat(M)` (no de `V·M`) una vez por draw en `gs_DrawElemsLit`.
+**Decisión: espacio mundo.** Por eso en [gs.c](plantilla/src/gs.c): existe
+`gs_camPos` + `gs_SetCameraPos`; la luz **no** se multiplica por `V`;
+`gs_normalMat = mat4_normalMat(M)` (no de `V·M`), calculado una vez por draw
+en `gs_DrawElemsLit`.

@@ -13,9 +13,6 @@
 #define GS_DISP_W	640
 #define GS_DISP_H	480
 
-/* ==========================
-   Vertex definition: position + color
-   ========================== */
 typedef struct Vert_t {
     vec3 pos;     /* Position in model/world space */
     vec3 color;   /* RGB color (0.0 – 1.0 per channel) */
@@ -38,11 +35,16 @@ typedef struct GsMaterial_t {
     float shininess;  /* e: exponente de especularidad */
 } GsMaterial;
 
-/* Temporal typedefs for shaders (unused for now) */
-typedef void VertShader;
-typedef void FragShader;
+/* Textura (buffer constante). Datos como BMP 24bpp: BGR, fila 0 = abajo. */
+enum { GS_FILTER_NEAREST, GS_FILTER_LINEAR };
+enum { GS_WRAP_CLAMP, GS_WRAP_REPEAT, GS_WRAP_MIRROR };
 
-/* ========================== */
+typedef struct GsTexture_t {
+    u32            w, h;   /* dimensiones en texels */
+    unsigned char *data;   /* w*h*3, BGR, fila 0 = abajo */
+    int            filter; /* GS_FILTER_* */
+    int            wrap;   /* GS_WRAP_* (igual para s y t) */
+} GsTexture;
 
 enum PrimType {
 	GS_TYPE_POINT,
@@ -51,21 +53,19 @@ enum PrimType {
 	GS_TYPE_MAX
 };
 
-/* Graphics related functions */
 void gs_Viewport(u32 x, u32 y, u32 w, u32 h);
-void gs_DrawBuffer(void);
 void gs_Clear(void);
 void gs_SetClearColor(u32 clear_color, f32 z_clear);
-void sg_UseProgram(VertShader *vsh, FragShader *fsh);
 
 void gs_PokePixel(u32 x, u32 y, u32 color);
 void gs_DrawArrays(u32 prim_type, Vert *v_arr, u32 v_count);
 void gs_DrawElems(u32 prim_type, Vert *v_arr, u32 v_count, u32 *i_arr, u32 i_count);
 
-/* Igual que gs_DrawElems pero con array paralelo de normales (1 por vértice,
-   mismos índices que v_arr). Solo GS_TYPE_TRIANGLES se ilumina. */
+/* Igual que gs_DrawElems pero con arrays paralelos de normales y UV (1 por
+   vértice, mismos índices que v_arr; ambos NULL permitidos).
+   Solo GS_TYPE_TRIANGLES se ilumina/texturiza. */
 void gs_DrawElemsLit(u32 prim_type, Vert *v_arr, u32 v_count,
-                     u32 *i_arr, u32 i_count, vec3 *n_arr);
+                     u32 *i_arr, u32 i_count, vec3 *n_arr, vec3 *t_arr);
 
 /* Buffer constante de luz (espacio mundo) */
 void gs_SetLight(GsLight light);
@@ -73,6 +73,8 @@ void gs_SetLight(GsLight light);
 void gs_SetMaterial(GsMaterial m);
 /* Posición de la cámara en mundo (necesaria para el especular) */
 void gs_SetCameraPos(vec3 cam);
+/* Buffer constante de textura. NULL = sin textura (default). */
+void gs_SetTexture(GsTexture *tex);
 /* Iluminación por fragmento: 0=off (default), 1=on */
 void gs_SetLighting(int enable);
 

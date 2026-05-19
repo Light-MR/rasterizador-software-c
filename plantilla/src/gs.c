@@ -21,6 +21,7 @@ static GsMaterial gs_material = { {1.0f,1.0f,1.0f}, 16.0f }; /* default */
 static vec3       gs_camPos;           /* posición de cámara en mundo */
 static int        gs_lighting = 0;     /* iluminación por fragmento on/off */
 static mat3       gs_normalMat;        /* normalMat(M) del draw lit actual */
+static GsTexture *gs_tex = NULL;       /* textura actual (NULL = sin textura) */
 
 /* ── Helpers internos ───────────────────────────────────────────── */
 
@@ -30,7 +31,6 @@ static void recalc_MVP(void) {
     mat4_mul(gs_MVP, PV,      gs_matM);
 }
 
-/* poke: escribe un píxel con alpha blending si gs_alpha < 1 */
 static void poke(s32 x, s32 y, u32 src) {
     if (x < 0 || y < 0 || (u32)x >= gs_fb_w || (u32)y >= gs_fb_h) return;
     u32 idx = (u32)y * gs_fb_w + (u32)x;
@@ -92,7 +92,6 @@ void gs_SetClearColor(u32 clear_color, f32 z_clear) {
     gs_clear_color = clear_color;
 }
 
-/* Limpia el framebuffer (color) y el z-buffer (profundidad = 1.0 = infinito) */
 void gs_Clear(void) {
     for (u32 j = gs_vp_y; j < gs_vp_y + gs_vp_h; j++) {
         for (u32 i = gs_vp_x; i < gs_vp_x + gs_vp_w; i++) {
@@ -112,14 +111,13 @@ void gs_SetProjMatrix (mat4 m) { memcpy(gs_matP, m, sizeof(mat4)); recalc_MVP();
 
 void gs_PokePixel(u32 x, u32 y, u32 color) { poke((s32)x, (s32)y, color); }
 u32* gs_GetFramebuffer(void)               { return gs_fb; }
-void gs_DrawBuffer(void)                   { /* main.c llama a OSW directamente */ }
-void sg_UseProgram(VertShader *vsh, FragShader *fsh) { (void)vsh; (void)fsh; }
 void gs_SetLineDepthTest(int e)            { gs_line_ztest    = e; }
 void gs_SetAlpha(float a)                  { gs_alpha         = a; }
 void gs_SetBackfaceCull(int e)             { gs_backface_cull = e; }
 void gs_SetLight(GsLight light)            { gs_light         = light; }
 void gs_SetMaterial(GsMaterial m)          { gs_material      = m; }
 void gs_SetCameraPos(vec3 cam)             { gs_camPos        = cam; }
+void gs_SetTexture(GsTexture *tex)         { gs_tex           = tex; }
 void gs_SetLighting(int e)                 { gs_lighting      = e; }
 
 /* ── Primitivas ─────────────────────────────────────────────────── */
@@ -172,10 +170,69 @@ static void __gs_DrawLine(Vert *v0, Vert *v1) {
     }
 }
 
+/* ── Muestreo de texturas (pizarrón) ────────────────────────────── */
+
+/* Modo de borde: lleva una coordenada cualquiera al rango [0,1]. */
+static float tex_wrap(float x, int mode) {
+    if (mode == GS_WRAP_REPEAT) {
+        return x - floorf(x);                       /* fmod fraccionario */
+    }
+    if (mode == GS_WRAP_MIRROR) {
+        x = fabsf(x);
+        float fl = floorf(x);
+        float fr = x - fl;
+        return ((int)fl & 1) ? (1.0f - fr) : fr;    /* espejo cada repetición */
+    }
+    /* CLAMP */
+    if (x < 0.0f) return 0.0f;
+    if (x > 1.0f) return 1.0f;
+    return x;
+}
+
+/* Texel (col,row) como RGB 0..1. data es BGR, fila 0 = abajo. */
+static vec3 tex_texel(const GsTexture *t, int col, int row) {
+    if (col < 0) col = 0;
+    if ((u32)col >= t->w) col = (int)t->w - 1;
+    if (row < 0) row = 0;
+    if ((u32)row >= t->h) row = (int)t->h - 1;
+    const unsigned char *p = t->data + ((size_t)row * t->w + (u32)col) * 3u;
+    vec3 c;
+    c.x = (float)p[0] / 255.0f;   /* R */
+    c.y = (float)p[1] / 255.0f;   /* G */
+    c.z = (float)p[2] / 255.0f;   /* B */
+    return c;
+}
+
+static vec3 tex_sample(const GsTexture *t, float s, float u) {
+    s = tex_wrap(s, t->wrap);
+    u = tex_wrap(u, t->wrap);
+    float fx = s * (float)(t->w - 1u);
+    float fy = u * (float)(t->h - 1u);
+
+    if (t->filter == GS_FILTER_NEAREST)
+        return tex_texel(t, (int)(fx + 0.5f), (int)(fy + 0.5f));
+
+    /* LINEAR (bilineal): 4 consultas + 3 interpolaciones */
+    int   x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+    float frac_x = fx - (float)x0;
+    float frac_y = fy - (float)y0;
+    vec3 c00 = tex_texel(t, x0,     y0);
+    vec3 c10 = tex_texel(t, x0 + 1, y0);
+    vec3 c01 = tex_texel(t, x0,     y0 + 1);
+    vec3 c11 = tex_texel(t, x0 + 1, y0 + 1);
+    vec3 a = {0,0,0}, b = {0,0,0}, r = {0,0,0};
+    a = vec3_lerp(a, c00, c10, frac_x);   /* interp. en s, fila inferior */
+    b = vec3_lerp(b, c01, c11, frac_x);   /* interp. en s, fila superior */
+    r = vec3_lerp(r, a,   b,   frac_y);   /* interp. en t                */
+    return r;
+}
+
 /* nrm0/1/2: normales por vértice para iluminación (NULL = sin iluminar).
-   Solo se usan si gs_lighting y los punteros no son NULL. */
+   tc0/1/2: UV por vértice para textura (NULL = sin texturizar).
+   Solo se usan si el estado correspondiente (gs_lighting / gs_tex) está. */
 static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
-                              vec3 *nrm0, vec3 *nrm1, vec3 *nrm2) {
+                              vec3 *nrm0, vec3 *nrm1, vec3 *nrm2,
+                              vec3 *tc0,  vec3 *tc1,  vec3 *tc2) {
 
     /* 1. Proyectar los 3 vértices */
     s32 sx0,sy0, sx1,sy1, sx2,sy2;
@@ -251,7 +308,6 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
             float b1 = (float)e1 * inv_area;
             float b2 = (float)e2 * inv_area;
 
-            /* Profundidad interpolada */
             float depth = b0*z0 + b1*z1 + b2*z2;
             u32   bidx  = (u32)py * gs_fb_w + (u32)px;
             if (depth >= gs_zbuf[bidx]) continue;
@@ -259,10 +315,9 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
                bloquean lo que hay detrás de ellos                        */
             if (gs_alpha >= 1.0f) gs_zbuf[bidx] = depth;
 
-            /* Pesos perspectivamente correctos (pizarrón):
-               a_p = Σ(bᵢ·aᵢ/wᵢ) / Σ(bᵢ/wᵢ).
-               wsum > 0 garantizado: iw* > 0 (w>0 en project) y b* >= 0
-               dentro del triángulo.                                     */
+            /* Pesos perspectiva (pizarrón):
+               a_p = (b0·a0/w0 + b1·a1/w1 + b2·a2/w2) / (b0/w0 + b1/w1 + b2/w2)
+               wsum > 0: iw* > 0 (w>0 en project) y b* >= 0 dentro del triángulo. */
             float wsum     = b0*iw0 + b1*iw1 + b2*iw2;
             float inv_wsum = 1.0f / wsum;
             float p0 = b0*iw0 * inv_wsum;
@@ -273,6 +328,14 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
             c.x = p0*v0->color.x + p1*v1->color.x + p2*v2->color.x;
             c.y = p0*v0->color.y + p1*v1->color.y + p2*v2->color.y;
             c.z = p0*v0->color.z + p1*v1->color.z + p2*v2->color.z;
+
+            /* Textura: UV interpolada perspectiva-correcta; el texel
+               reemplaza el color base para que la luz lo module. */
+            if (gs_tex && tc0 && tc1 && tc2) {
+                float s = p0*tc0->x + p1*tc1->x + p2*tc2->x;
+                float u = p0*tc0->y + p1*tc1->y + p2*tc2->y;
+                c = tex_sample(gs_tex, s, u);
+            }
 
             if (lit) {
                 /* (n, P) del fragmento, interpolados perspectiva-correctos */
@@ -352,7 +415,7 @@ void gs_DrawArrays(u32 prim_type, Vert *v_arr, u32 v_count) {
         case GS_TYPE_TRIANGLES:
             for (i=0; i+2<v_count; i+=3)
                 __gs_DrawTriangle(&v_arr[i], &v_arr[i+1], &v_arr[i+2],
-                                  NULL, NULL, NULL);
+                                  NULL, NULL, NULL, NULL, NULL, NULL);
             break;
         default: break;
     }
@@ -376,17 +439,17 @@ void gs_DrawElems(u32 prim_type, Vert *v_arr, u32 v_count,
                 __gs_DrawTriangle(&v_arr[i_arr[i]],
                                   &v_arr[i_arr[i+1]],
                                   &v_arr[i_arr[i+2]],
-                                  NULL, NULL, NULL);
+                                  NULL, NULL, NULL, NULL, NULL, NULL);
             break;
         default: break;
     }
 }
 
-/* Como gs_DrawElems pero con normales por vértice (array paralelo, mismos
-   índices). La normalMat(M) se calcula una sola vez por draw. La iluminación
-   solo se aplica si gs_SetLighting(1) está activo (ver __gs_DrawTriangle). */
+/* Como gs_DrawElems pero con arrays paralelos de normales y UV (mismos
+   índices; ambos NULL permitidos). La normalMat(M) se calcula una vez por
+   draw. Iluminación si gs_SetLighting(1); textura si gs_SetTexture(!=NULL). */
 void gs_DrawElemsLit(u32 prim_type, Vert *v_arr, u32 v_count,
-                     u32 *i_arr, u32 i_count, vec3 *n_arr) {
+                     u32 *i_arr, u32 i_count, vec3 *n_arr, vec3 *t_arr) {
     (void)v_count;
     mat4_normalMat(gs_normalMat, gs_matM);
     u32 i;
@@ -400,13 +463,17 @@ void gs_DrawElemsLit(u32 prim_type, Vert *v_arr, u32 v_count,
                 __gs_DrawLine(&v_arr[i_arr[i]], &v_arr[i_arr[i+1]]);
             break;
         case GS_TYPE_TRIANGLES:
-            for (i=0; i+2<i_count; i+=3)
-                __gs_DrawTriangle(&v_arr[i_arr[i]],
-                                  &v_arr[i_arr[i+1]],
-                                  &v_arr[i_arr[i+2]],
-                                  &n_arr[i_arr[i]],
-                                  &n_arr[i_arr[i+1]],
-                                  &n_arr[i_arr[i+2]]);
+            for (i=0; i+2<i_count; i+=3) {
+                u32 a = i_arr[i], b = i_arr[i+1], c = i_arr[i+2];
+                __gs_DrawTriangle(
+                    &v_arr[a], &v_arr[b], &v_arr[c],
+                    n_arr ? &n_arr[a] : NULL,
+                    n_arr ? &n_arr[b] : NULL,
+                    n_arr ? &n_arr[c] : NULL,
+                    t_arr ? &t_arr[a] : NULL,
+                    t_arr ? &t_arr[b] : NULL,
+                    t_arr ? &t_arr[c] : NULL);
+            }
             break;
         default: break;
     }
