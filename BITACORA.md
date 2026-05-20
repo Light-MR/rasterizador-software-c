@@ -1,22 +1,22 @@
 # Bitácora — Pipeline Gráfico por Software
 **Trabajo Terminal | ESCOM-IPN**
 
-Registro del desarrollo: decisiones de diseño, fórmulas del pizarrón y su
+Registro del desarrollo: decisiones de diseño, notas técnicas y su
 correspondencia directa con el código. Las fórmulas se escriben **desarrolladas**
 (sin notación Σ). Rutas relativas a la raíz del repositorio.
 
 ---
 
-## Parte A — Pizarrón → Implementación
+## Parte A — Notas → Implementación
 
-Cada concepto muestra: la fórmula del pizarrón, el estado ([x] / [-] / [ ]) y
+Cada concepto muestra: la nota técnica, el estado ([x] / [-] / [ ]) y
 exactamente **dónde y cómo** vive en el código.
 
 ---
 
 ### A.1 Interpolación perspectivamente correcta — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 a_p = (b0·a0/w0 + b1·a1/w1 + b2·a2/w2)
@@ -45,7 +45,7 @@ fue clave al añadir iluminación.
 
 ### A.2 Pipeline y espacios — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 Aplicación → vert shader → rasterizador → frag shader → framebuffer
@@ -73,7 +73,7 @@ Tabla de etapas detallada → [Parte D](#parte-d--etapas-del-pipeline).
 
 ### A.3 Componente difusa (Lambert) — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 cos θ = l·n          (l, n normalizados)
@@ -96,7 +96,7 @@ C_d   = base · I_d · L_d
 
 ### A.4 Componente especular — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 r = reflect(l, n) = 2·(n·l)·n − l
@@ -118,7 +118,7 @@ I_e = max(r·v, 0)^e
 
 ### A.5 Color final (Phong completo) — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 C_final = C_e·I_e·L  +  C_d·I_d·L  +  C_a·I_a
@@ -141,7 +141,7 @@ C_final = C_e·I_e·L  +  C_d·I_d·L  +  C_a·I_a
 
 ### A.6 Atenuación por distancia — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 Influencia = (1 / dist(luz, P))^f
@@ -162,7 +162,7 @@ Influencia = (1 / dist(luz, P))^f
 
 ### A.7 Tipo de luz — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 ```
 l = (x, y, z, w)
@@ -180,7 +180,7 @@ l = (x, y, z, w)
 
 ### A.8 Texturas (muestreo) — [x]
 
-**Del pizarrón:**
+**Nota:**
 
 Espacio de texturas normalizado `(s, t) ∈ [0, 1]`, origen abajo-izquierda.
 UV interpolada perspectiva-correcta como cualquier otro atributo del fragmento.
@@ -208,7 +208,7 @@ Filtros:
 - **NEAREST** — 1 consulta: `data[t·w + s]`. Pixeleado.
 - **LINEAR (bilineal)** — 4 consultas + 3 `lerp` (en s dos veces, luego en t). Suavizado.
 
-Frag shader (pizarrón):
+Frag shader:
 ```
 vec2 uv    = buffer_attrib.uv;
 vec4 color = sampleTex(tex, uv);
@@ -317,9 +317,9 @@ Luz, material y textura son **constantes** (igual para todos los fragmentos del 
 
 ## Parte E — Notas conceptuales
 
-### E.1 Buffer constante (uniforms): pizarrón → código
+### E.1 Buffer constante (uniforms): nota → código
 
-**Del pizarrón:** existe un "buffer constante / uniforms" con **Luz, Material**
+**Nota:** existe un "buffer constante / uniforms" con **Luz, Material**
 (**Textura** implementada — ver [A.8](#a8-texturas-muestreo----)).
 El `frag_shader(x, y, buffer_attrib)` lee ese estado: lo *constante* viene del
 buffer; lo *por-vértice* (UV, etc.) viene interpolado en `buffer_attrib`.
@@ -339,7 +339,7 @@ nuevo implica tocar el formato de vértice o añadir un array paralelo.
 
 ### E.2 Phong vs Gouraud
 
-El pizarrón marca el pipeline como **vert shader → rasterizador → frag shader**
+La nota marca el pipeline como **vert shader → rasterizador → frag shader**
 y especifica que el fragmento lleva `(n, P)`. Ahí está la diferencia:
 
 - **Gouraud (por vértice):** iluminación evaluada en el *vert shader* (3 veces
@@ -357,7 +357,7 @@ por lo que el salto a Phong no requirió infraestructura nueva.
 
 ### E.3 Espacio mundo vs espacio vista
 
-El pizarrón presenta las dos formas equivalentes:
+La nota presenta las dos formas equivalentes:
 
 | | Espacio mundo | Espacio vista |
 |---|---|---|

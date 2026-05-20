@@ -26,7 +26,7 @@ muestreo de texturas bilineal. Incluye MiniPaint, una aplicación de dibujo pixe
 ├── bob_esponja/
 │   ├── bob_esponja.tdm
 │   └── bob_esponja_tex.bmp
-└── BITACORA.md           ← registro pizarrón → implementación
+└── BITACORA.md           ← registro notas → implementación
 ```
 
 ---
