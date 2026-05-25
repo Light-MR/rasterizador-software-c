@@ -100,4 +100,8 @@ void gs_SetAlpha(float a);
    Necesario desactivar para ver caras traseras con transparencia */
 void gs_SetBackfaceCull(int enable);
 
+/* SSAA 2×: downsample del buffer interno (2×) al framebuffer de display.
+   Llamar justo antes de OSW_VideoDrawBuffer cada frame. */
+void gs_Resolve(void);
+
 #endif /*__GS_H__*/

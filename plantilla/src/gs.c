@@ -9,7 +9,10 @@ static u32   *gs_fb;
 static u32    gs_fb_w, gs_fb_h;
 static u32    gs_vp_x, gs_vp_y, gs_vp_w, gs_vp_h;
 static u32    gs_clear_color;
-static float  gs_zbuf[GS_DISP_W * GS_DISP_H]; /* buffer de profundidad */
+static float  gs_zbuf[GS_DISP_W * 2 * GS_DISP_H * 2];
+static u32    gs_internal_fb[GS_DISP_W * 2 * GS_DISP_H * 2];
+static u32   *gs_ext_fb;
+static u32    gs_ext_w, gs_ext_h;
 
 static mat4   gs_matM, gs_matV, gs_matP, gs_MVP;
 static int    gs_line_ztest    = 1;    /* 1=normal, 0=siempre dibuja */
@@ -70,10 +73,29 @@ static s32 edge_fn(s32 ax, s32 ay, s32 bx, s32 by, s32 px, s32 py) {
 
 /* ── Inicialización ─────────────────────────────────────────────── */
 
+void gs_Resolve(void) {
+    for (u32 y = 0; y < gs_ext_h; y++) {
+        for (u32 x = 0; x < gs_ext_w; x++) {
+            u32 ix = x << 1, iy = y << 1, iw = gs_fb_w;
+            u32 c00 = gs_fb[ iy      * iw + ix    ];
+            u32 c10 = gs_fb[ iy      * iw + ix + 1];
+            u32 c01 = gs_fb[(iy + 1) * iw + ix    ];
+            u32 c11 = gs_fb[(iy + 1) * iw + ix + 1];
+            u32 r = ((c00>>16&0xFF)+(c10>>16&0xFF)+(c01>>16&0xFF)+(c11>>16&0xFF)) >> 2;
+            u32 g = ((c00>> 8&0xFF)+(c10>> 8&0xFF)+(c01>> 8&0xFF)+(c11>> 8&0xFF)) >> 2;
+            u32 b = ((c00    &0xFF)+(c10    &0xFF)+(c01    &0xFF)+(c11    &0xFF)) >> 2;
+            gs_ext_fb[y * gs_ext_w + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void gs_Init(u32 *fb, u32 fb_w, u32 fb_h) {
-    gs_fb   = fb;
-    gs_fb_w = fb_w;
-    gs_fb_h = fb_h;
+    gs_ext_fb = fb;
+    gs_ext_w  = fb_w;
+    gs_ext_h  = fb_h;
+    gs_fb     = gs_internal_fb;
+    gs_fb_w   = fb_w * 2;
+    gs_fb_h   = fb_h * 2;
     mat4_identity(gs_matM);
     mat4_identity(gs_matV);
     mat4_identity(gs_matP);
@@ -110,7 +132,7 @@ void gs_SetProjMatrix (mat4 m) { memcpy(gs_matP, m, sizeof(mat4)); recalc_MVP();
 /* ── Acceso al framebuffer ──────────────────────────────────────── */
 
 void gs_PokePixel(u32 x, u32 y, u32 color) { poke((s32)x, (s32)y, color); }
-u32* gs_GetFramebuffer(void)               { return gs_fb; }
+u32* gs_GetFramebuffer(void)               { return gs_ext_fb; }
 void gs_SetLineDepthTest(int e)            { gs_line_ztest    = e; }
 void gs_SetAlpha(float a)                  { gs_alpha         = a; }
 void gs_SetBackfaceCull(int e)             { gs_backface_cull = e; }

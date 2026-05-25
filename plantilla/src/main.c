@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
 
   /* Inicializar el sistema gráfico */
   gs_Init(framebuffer, FB_W, FB_H);
-  gs_Viewport(0, 0, FB_W, FB_H);
+  gs_Viewport(0, 0, FB_W * 2, FB_H * 2);
   gs_SetClearColor(0xFF1C1C1C, 1.0f);
 
   /* Modelo opcional: `prog.exe <ruta.tdm>` carga y renderiza esa malla.
@@ -359,6 +359,7 @@ int main(int argc, char **argv) {
       gs_DrawElems(GS_TYPE_LINES, cube_verts, 24, face_edge_idx, 48);
     }
 
+    gs_Resolve();
     OSW_VideoDrawBuffer(framebuffer, FB_W, FB_H);
     OSW_VideoSwapBuffers();
   }
