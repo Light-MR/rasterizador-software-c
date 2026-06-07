@@ -67,8 +67,11 @@ void gs_DrawElems(u32 prim_type, Vert *v_arr, u32 v_count, u32 *i_arr, u32 i_cou
 void gs_DrawElemsLit(u32 prim_type, Vert *v_arr, u32 v_count,
                      u32 *i_arr, u32 i_count, vec3 *n_arr, vec3 *t_arr);
 
-/* Buffer constante de luz (espacio mundo) */
+/* Luz principal */
 void gs_SetLight(GsLight light);
+/* Luz de relleno opcional (difusa pura, sin especular). w=0 direccional, w=1 punto. */
+void gs_SetFillLight(GsLight l);
+void gs_ClearFillLight(void);
 /* Buffer constante de material */
 void gs_SetMaterial(GsMaterial m);
 /* Posición de la cámara en mundo (necesaria para el especular) */

@@ -19,7 +19,9 @@ static int    gs_line_ztest    = 1;    /* 1=normal, 0=siempre dibuja */
 static float  gs_alpha         = 1.0f; /* 1.0=opaco, 0.0=invisible   */
 static int    gs_backface_cull = 1;    /* 1=cull (default), 0=ambas caras */
 
-static GsLight    gs_light;            /* buffer constante de luz (mundo) */
+static GsLight    gs_light;            /* luz principal */
+static GsLight    gs_light2;           /* luz de relleno opcional */
+static int        gs_light2_on = 0;
 static GsMaterial gs_material = { {1.0f,1.0f,1.0f}, 16.0f }; /* default */
 static vec3       gs_camPos;           /* posición de cámara en mundo */
 static int        gs_lighting = 0;     /* iluminación por fragmento on/off */
@@ -41,10 +43,11 @@ static void poke(s32 x, s32 y, u32 src) {
 }
 
 static u32 vec3_to_argb(vec3 c) {
-    u32 r = (u32)(c.x * 255.0f) & 0xFF;
-    u32 g = (u32)(c.y * 255.0f) & 0xFF;
-    u32 b = (u32)(c.z * 255.0f) & 0xFF;
-    return 0xFF000000 | (r << 16) | (g << 8) | b;
+    /* linear → sRGB (gamma ≈ 2.0): sqrtf evita powf y es suficientemente preciso */
+    float r = sqrtf(c.x < 0.0f ? 0.0f : c.x > 1.0f ? 1.0f : c.x);
+    float g = sqrtf(c.y < 0.0f ? 0.0f : c.y > 1.0f ? 1.0f : c.y);
+    float b = sqrtf(c.z < 0.0f ? 0.0f : c.z > 1.0f ? 1.0f : c.z);
+    return 0xFF000000 | ((u32)(r * 255.0f) << 16) | ((u32)(g * 255.0f) << 8) | (u32)(b * 255.0f);
 }
 
 /* Transforma un vértice por gs_MVP (precalculada) y lo lleva a
@@ -137,6 +140,8 @@ void gs_SetLineDepthTest(int e)            { gs_line_ztest    = e; }
 void gs_SetAlpha(float a)                  { gs_alpha         = a; }
 void gs_SetBackfaceCull(int e)             { gs_backface_cull = e; }
 void gs_SetLight(GsLight light)            { gs_light         = light; }
+void gs_SetFillLight(GsLight l)            { gs_light2 = l; gs_light2_on = 1; }
+void gs_ClearFillLight(void)               { gs_light2_on = 0; }
 void gs_SetMaterial(GsMaterial m)          { gs_material      = m; }
 void gs_SetCameraPos(vec3 cam)             { gs_camPos        = cam; }
 void gs_SetTexture(GsTexture *tex)         { gs_tex           = tex; }
@@ -211,7 +216,7 @@ static float tex_wrap(float x, int mode) {
     return x;
 }
 
-/* Texel (col,row) como RGB 0..1. data es BGR, fila 0 = abajo. */
+/* Texel (col,row) como RGB 0..1. fila 0 = abajo. */
 static vec3 tex_texel(const GsTexture *t, int col, int row) {
     if (col < 0) col = 0;
     if ((u32)col >= t->w) col = (int)t->w - 1;
@@ -219,9 +224,9 @@ static vec3 tex_texel(const GsTexture *t, int col, int row) {
     if ((u32)row >= t->h) row = (int)t->h - 1;
     const unsigned char *p = t->data + ((size_t)row * t->w + (u32)col) * 3u;
     vec3 c;
-    c.x = (float)p[0] / 255.0f;   /* R */
-    c.y = (float)p[1] / 255.0f;   /* G */
-    c.z = (float)p[2] / 255.0f;   /* B */
+    c.x = (float)p[0] / 255.0f;
+    c.y = (float)p[1] / 255.0f;
+    c.z = (float)p[2] / 255.0f;
     return c;
 }
 
@@ -408,6 +413,7 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
                 }
 
                 /* C_final = base·(C_a·I_a + L·I_d) + C_e·L·I_e */
+                vec3 c_base = c;
                 c.x = c.x*(gs_light.ambient.x + gs_light.color.x*d)
                     + gs_material.specular.x * gs_light.color.x * s;
                 c.y = c.y*(gs_light.ambient.y + gs_light.color.y*d)
@@ -415,6 +421,24 @@ static void __gs_DrawTriangle(Vert *v0, Vert *v1, Vert *v2,
                 c.z = c.z*(gs_light.ambient.z + gs_light.color.z*d)
                     + gs_material.specular.z * gs_light.color.z * s;
                 c = vec3_clamp(c, 0.0f, 1.0f);
+
+                /* Luz de relleno (fill/rim): difusa pura, sin especular */
+                if (gs_light2_on) {
+                    vec3 L2;
+                    if (gs_light2.w >= 0.5f) {
+                        vec3 Lv2 = {0,0,0};
+                        Lv2 = vec3_sub(Lv2, gs_light2.pos, P);
+                        L2  = vec3_normalize(Lv2);
+                    } else {
+                        L2 = vec3_normalize(gs_light2.pos);
+                    }
+                    float d2 = vec3_dot(N, L2);
+                    if (d2 < 0.0f) d2 = 0.0f;
+                    c.x += c_base.x * gs_light2.color.x * d2;
+                    c.y += c_base.y * gs_light2.color.y * d2;
+                    c.z += c_base.z * gs_light2.color.z * d2;
+                    c = vec3_clamp(c, 0.0f, 1.0f);
+                }
             }
             poke(px, py, vec3_to_argb(c));
         }

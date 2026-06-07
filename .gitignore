@@ -1,0 +1,31 @@
+# Artefactos de compilación (no son código fuente)
+*.obj
+*.exe
+*.o
+*.ppm
+_build_tmp.bat
+
+# libosw: librería externa (github.com/fadedled/libosw) — no se versiona aquí
+libosw/
+
+# Asset comprimido (el .tdm y .bmp extraídos sí se versionan)
+bob_esponja.zip
+
+# Archivos locales de asistentes IA (CLAUDE.md sí se versiona para recuperar contexto)
+GEMINI.md
+.claude/
+.codex/
+
+# Modelos GLTF fuente (~273 MB total) — no se versionan; regenerar con recursos/gltf2tdm.py
+recursos/asian_boat/
+recursos/koi_fish/
+recursos/koi_fish-rr/
+recursos/koi_fish2/
+recursos/koi_fish3/
+recursos/lotus/
+recursos/lotus(1)/
+recursos/lotus_flower_by_geometry_nodes/
+
+# Asset demasiado pesado para git (49 MB)
+# Regenerar: python recursos/gltf2tdm.py recursos/koi_fish/scene.gltf -o plantilla/assets/koi_orig.tdm --tex
+plantilla/assets/koi_orig.bmp

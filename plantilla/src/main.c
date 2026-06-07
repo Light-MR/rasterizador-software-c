@@ -15,6 +15,7 @@
 #include <gs.h>
 #include <libosw/osw.h>
 #include <stdio.h>
+#include <string.h>
 #include <tdm.h>
 #include <trx.h>
 
@@ -132,16 +133,19 @@ static u32 face_edge_idx[48] = {
     /* abajo     */ 20, 21, 21, 22, 22, 23, 23, 20,
 };
 
-/* ── Keycodes (Win32 VK) ────────────────────────────────────────── */
-#define KEY_LEFT 0x4B
+/* ── Keycodes (PS/2 scan codes) ─────────────────────────────────── */
+#define KEY_LEFT  0x4B
 #define KEY_RIGHT 0x4D
-#define KEY_UP 0x48
-#define KEY_DOWN 0x50
-#define KEY_W 0x11
-#define KEY_S 0x1F
-#define KEY_Q 0x10
-#define KEY_E 0x12
-#define KEY_O 0x18 /* toggle perspectiva / ortogonal */
+#define KEY_UP    0x48
+#define KEY_DOWN  0x50
+#define KEY_W     0x11
+#define KEY_S     0x1F
+#define KEY_A     0x1E
+#define KEY_D     0x20
+#define KEY_Q     0x10
+#define KEY_E     0x12
+#define KEY_O     0x18 /* toggle perspectiva / ortogonal */
+#define KEY_SPACE 0x39 /* toggle auto-spin               */
 
 /* ── Main ───────────────────────────────────────────────────────── */
 
@@ -167,14 +171,21 @@ int main(int argc, char **argv) {
       printf("[main] no se pudo cargar '%s'; mostrando el cubo.\n", argv[1]);
   }
 
-  /* Textura del modelo (junto al .tdm). Ejecutar desde plantilla\. */
+  /* Textura del modelo: busca <mismo_nombre>.bmp junto al .tdm */
   GsTexture tex;
   int has_tex = 0;
-  if (show_model &&
-      bmp_Load("..\\bob_esponja\\bob_esponja_tex.bmp", &tex) == 0) {
-    tex.filter = GS_FILTER_LINEAR;
-    tex.wrap   = GS_WRAP_REPEAT;
-    has_tex    = 1;
+  if (show_model) {
+    char bmp_path[512];
+    strncpy(bmp_path, argv[1], sizeof(bmp_path) - 1);
+    bmp_path[sizeof(bmp_path) - 1] = '\0';
+    char *dot = strrchr(bmp_path, '.');
+    if (dot) strcpy(dot, ".bmp");
+    if (bmp_Load(bmp_path, &tex) == 0) {
+      tex.filter = GS_FILTER_LINEAR;
+      tex.wrap   = GS_WRAP_REPEAT;
+      has_tex    = 1;
+      printf("[main] textura: %s\n", bmp_path);
+    }
   }
 
   /* Ángulos de rotación (reconstruyen M limpia cada frame) y distancia de
@@ -184,56 +195,58 @@ int main(int argc, char **argv) {
   float angle_z = 0.0f;
   float cam_dist = 6.0f;
   int use_ortho = 0; /* 0=perspectiva, 1=ortogonal */
+  int auto_spin = 1; /* SPACE para pausar/reanudar  */
   vec3 center = {0.0f, 0.0f, 0.0f};
   vec3 up = {0.0f, 1.0f, 0.0f};
 
+  /* Estado de teclas sostenidas (scan-code → 0/1) */
+  static int keys[256];
+
   OSW_KeyboardSetPolling(1);
+  OSW_MouseSetPolling(1);
 
   while (1) {
     OSW_Poll();
 
-    /* Input: modificar ángulos directamente */
+    /* ── Input de teclado ────────────────────────────────────────── */
+    /* Actualiza el array de teclas sostenidas y maneja eventos de un solo disparo */
     OSWKeyEvent kev;
     while (OSW_KeyboardGetEvent(&kev)) {
-      if (kev.type != OSW_KEYEV_TYPE_PRESSED)
-        continue;
-      switch (kev.keycode) {
-      case KEY_LEFT:
-        angle_y -= 10.0f;
-        break;
-      case KEY_RIGHT:
-        angle_y += 10.0f;
-        break;
-      case KEY_UP:
-        angle_x -= 10.0f;
-        break;
-      case KEY_DOWN:
-        angle_x += 10.0f;
-        break;
-      case KEY_Q:
-        angle_z -= 10.0f;
-        break;
-      case KEY_E:
-        angle_z += 10.0f;
-        break;
-      case KEY_W:
-        cam_dist -= 0.2f;
-        if (cam_dist < 0.3f)
-          cam_dist = 0.3f;
-        break;
-      case KEY_S:
-        cam_dist += 0.2f;
-        break;
-      case KEY_O:
-        use_ortho = !use_ortho;
-        break;
-      default:
-        break;
+      if (kev.keycode < 256) {
+        if (kev.type == OSW_KEYEV_TYPE_PRESSED)  keys[kev.keycode] = 1;
+        if (kev.type == OSW_KEYEV_TYPE_RELEASED) keys[kev.keycode] = 0;
+      }
+      if (kev.type == OSW_KEYEV_TYPE_PRESSED) {
+        if (kev.keycode == KEY_O)     use_ortho = !use_ortho;
+        if (kev.keycode == KEY_SPACE) auto_spin = !auto_spin;
       }
     }
 
-    /* Auto-spin: 0.5° por frame (≈30°/seg a 60fps, vuelta en ~12 seg) */
-    angle_y += 0.1f;
+    /* Rotación y zoom continuos mientras la tecla esté presionada */
+    if (keys[KEY_LEFT]  || keys[KEY_A]) angle_y -= 2.0f;
+    if (keys[KEY_RIGHT] || keys[KEY_D]) angle_y += 2.0f;
+    if (keys[KEY_UP])                   angle_x -= 2.0f;
+    if (keys[KEY_DOWN])                 angle_x += 2.0f;
+    if (keys[KEY_Q])                    angle_z -= 2.0f;
+    if (keys[KEY_E])                    angle_z += 2.0f;
+    if (keys[KEY_W]) { cam_dist -= 0.15f; if (cam_dist < 0.3f) cam_dist = 0.3f; }
+    if (keys[KEY_S])   cam_dist += 0.15f;
+
+    /* ── Input de mouse ──────────────────────────────────────────── */
+    /* Botón izquierdo + arrastrar → rotar; scroll → zoom */
+    OSWMouse mouse;
+    OSW_MouseGetState(&mouse);
+    if (mouse.btn & OSW_MOUSE_BTN0) {
+      angle_y += mouse.dx * 0.4f;
+      angle_x += mouse.dy * 0.4f;
+    }
+    if (mouse.scroll) {
+      cam_dist -= mouse.scroll * 0.4f;
+      if (cam_dist < 0.3f) cam_dist = 0.3f;
+    }
+
+    /* Auto-spin (SPACE para pausar) */
+    if (auto_spin) angle_y += 0.2f;
 
     /* Reconstruir Model matrix desde identidad — sin acumulación, sin deriva */
     mat4 M;
@@ -274,26 +287,31 @@ int main(int argc, char **argv) {
        * así se ve siempre. Iluminación Phong difusa+ambiente (espacio
        * mundo, por fragmento); luz de punto fija en mundo. */
       GsLight luz = {
-          {1.5f, 1.8f, 2.5f},     /* pos en mundo (w=1) */
-          {2.4f, 2.4f, 2.4f},     /* color de luz L (sube por la atenuación) */
-          {0.15f, 0.15f, 0.15f},  /* ambiente C_a·I_a */
-          1.0f,                   /* w=1 → luz de punto (w=0 sería sol) */
-          1.0f};                  /* atenuación f en (1/dist)^f */
-      GsMaterial mat = {{0.7f, 0.7f, 0.7f}, /* C_e color del brillo */
-                        64.0f};             /* e exponente especular */
+          {1.5f, 1.8f, 2.5f},
+          {0.82f, 0.80f, 0.74f},
+          {0.15f, 0.15f, 0.15f},
+          1.0f, 1.0f};
+      GsMaterial mat = {{0.10f, 0.10f, 0.10f}, 16.0f};
       gs_SetAlpha(1.0f);
       gs_SetLineDepthTest(1);
       gs_SetBackfaceCull(0);
       gs_SetCameraPos(eye);
       gs_SetLight(luz);
+      /* Luz de relleno muy suave: solo toca los perfiles laterales */
+      GsLight fill = {{-0.6f, -1.0f, -1.2f},
+                      {0.05f, 0.06f, 0.09f},
+                      {0.0f,  0.0f,  0.0f},
+                      0.0f, 0.0f};
+      gs_SetFillLight(fill);
       gs_SetMaterial(mat);
       gs_SetLighting(1);
       gs_SetTexture(has_tex ? &tex : NULL);
       gs_DrawElemsLit(GS_TYPE_TRIANGLES, model.verts, model.n_verts,
                       model.index, model.n_index, model.normal,
                       has_tex ? model.texcoord : NULL);
-      gs_SetLighting(0);     /* deja el estado limpio para otras ramas */
+      gs_SetLighting(0);
       gs_SetTexture(NULL);
+      gs_ClearFillLight();
     } else if (use_ortho) {
       /* MODO ORTOGONAL: Caras OPACAS con backface culling: cada píxel lo dibuja un triángulo → sin diagonal */
       gs_SetAlpha(1.0f);

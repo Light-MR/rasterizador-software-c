@@ -268,15 +268,43 @@ return color;
    UV perspectiva-correcta; texel modulado por Phong. Solo en el `.tdm`.
    Ver [A.8](#a8-texturas-muestreo----).
 
+8. **Conversor GLTF → TDM (`recursos/gltf2tdm.py`).** Recorre la jerarquía
+   de nodos del GLTF aplicando matrices mundo acumuladas. UV flip (`v = 1−v`)
+   para que el origen quede abajo-izquierda (convenio BMP/OpenGL). Normales
+   transformadas con **inverse-transpose** (`xf_normal`) para soportar escala
+   no uniforme (koi_fish3 tiene Y ×10). Textura exportada como BMP 24bpp RGB
+   (Pillow en Windows escribe RGB, no BGR; `tex_texel` lee `p[0]=R` — correcto).
+   Uso: `python gltf2tdm.py scene.gltf -o out.tdm --tex`
+
+9. **Controles interactivos continuos.** Array `keys[256]` de teclas sostenidas
+   (scan codes PS/2); se rellena en el loop de eventos `OSW_KeyboardGetEvent`.
+   Mouse drag con `OSW_MouseGetState` (btn0 = rotar, scroll = zoom).
+   Toggle auto-spin con SPACE; toggle ortogonal/perspectiva con O.
+
+10. **Luz de relleno (`gs_SetFillLight`).** Segunda luz difusa pura (sin especular),
+    independiente de la luz principal. `w=0` direccional, `w=1` punto. Se aplica
+    después del cálculo principal usando el color base guardado (`c_base`).
+    Permite simular rebote de agua/cielo sin cambiar la API de `gs_SetLight`.
+    Parámetros actuales: dirección {−0.6, −1.0, −1.2}, intensidad muy baja
+    {0.05, 0.06, 0.09} para no revelar degradados de textura en el vientre del koi.
+
+11. **Exploración de corrección gamma.** Se probó linearizar textura en `tex_texel`
+    (`c² ≈ sRGB→linear`) y encodificar salida en `vec3_to_argb` (`√c ≈ linear→sRGB`).
+    Resultado: el `c²` aplastaba valores medios a casi negro (zonas naranjas del koi
+    aparecían como manchas negras) y el `√c` levantaba sombras revelando degradados
+    de textura no deseados. Conclusión: gamma completa requiere tonemapping y es
+    mejor implementarla en la variante OpenGL (Fase 2). La corrección se revirtió;
+    solo se conservó el fill light.
+
 ---
 
 ## Parte C — Pendiente
 
-- `C_d`/`C_a` como material real separado del color de vértice.
-- Múltiples luces (hoy: una sola, direccional o punto vía `w`).
-- Texturas en el cubo y formatos de pixel adicionales (hoy: solo `.tdm`, 24bpp BI_RGB).
-- Mallas con winding mixto / sombreado a dos caras.
-- Iluminación en el cubo (hoy: solo en el `.tdm`).
+- Sistema de plantas procedurales — ver `plantilla/PLAN_PLANTAS.md`.
+- Variante OpenGL con PBR (Fase 2) — implementar en Linux, usar `OSW_FLAG_USE_OPENGL`.
+- Escena completa del estanque chino: koi animados, bote, plantas, agua.
+- Múltiples luces en el rasterizador software (hoy: principal + 1 fill).
+- Gamma correction + tonemapping correctos (pendiente para variante OpenGL).
 
 ---
 
